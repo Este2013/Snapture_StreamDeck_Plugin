@@ -284,8 +284,12 @@ snapture.on("event", (evt: { event: string; state?: string; data?: any }) => {
     if (evt.event === "stateChanged") Recording.onEvent(evt.state ?? "idle");
     else if (evt.event === "elapsed") Recording.onEvent(evt.state ?? "recording", evt.data?.seconds);
     else if (evt.event === "recordingCompleted") Recording.onEvent("idle");
-    else if (evt.event === "ping") flashPing();
+    else if (evt.event === "ping") { flashPing(); void safeRequest("heartbeat"); } // answer the app
 });
+
+// Periodic heartbeat so the app can detect us going away (Stream Deck closing)
+// even if the socket close isn't observed promptly.
+setInterval(() => { if (snapture.isConnected) void safeRequest("heartbeat"); }, 3000);
 snapture.on("disconnected", () => Recording.onEvent("idle"));
 snapture.on("status", pushStatus);
 
