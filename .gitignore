@@ -1,0 +1,3 @@
+node_modules/
+*.streamDeckPlugin
+com.este.snapture.sdPlugin/logs/

@@ -1,0 +1,152 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8" />
+    <style>
+        body { font-family: "Segoe UI", sans-serif; font-size: 13px; color: #d8d8d8; background: #2d2d2d; margin: 0; padding: 12px; }
+        .row { margin-bottom: 12px; }
+        label.h { display: block; color: #969696; font-size: 11px; text-transform: uppercase; letter-spacing: .4px; margin-bottom: 6px; }
+        select, .btn { width: 100%; box-sizing: border-box; padding: 6px 8px; background: #3d3d3d; color: #fff; border: 1px solid #555; border-radius: 4px; }
+        .radios label { display: block; padding: 4px 0; cursor: pointer; }
+        .hidden { display: none; }
+        .status { font-size: 11px; color: #8a8a8a; border-top: 1px solid #444; padding-top: 8px; }
+        .status.warn { color: #f0a020; }
+        .inline { display: flex; gap: 8px; }
+        .inline .btn { width: auto; cursor: pointer; }
+    </style>
+</head>
+<body>
+    <div class="row radios">
+        <label class="h">When pressed</label>
+        <label><input type="radio" name="choice" value="picker" /> Open the picker</label>
+        <label><input type="radio" name="choice" value="display" /> Use a specific display</label>
+        <label><input type="radio" name="choice" value="window" /> Use a specific window</label>
+        <label><input type="radio" name="choice" value="repeat" /> Repeat the last capture</label>
+        <label><input type="radio" name="choice" value="library" /> Open the library folder</label>
+    </div>
+
+    <div class="row hidden" id="pickerModeRow">
+        <label class="h">Starting selection</label>
+        <select id="pickerMode">
+            <option value="default">Default</option>
+            <option value="display">Display</option>
+            <option value="window">Window</option>
+            <option value="custom">Custom</option>
+        </select>
+    </div>
+
+    <div class="row hidden" id="displayRow">
+        <label class="h">Display</label>
+        <select id="display"></select>
+    </div>
+
+    <div class="row hidden" id="windowRow">
+        <label class="h">Window</label>
+        <div class="inline">
+            <select id="window"></select>
+            <button class="btn" id="refreshWindows" title="Refresh">↻</button>
+        </div>
+    </div>
+
+    <div class="row hidden" id="formatRow">
+        <label class="h">Format</label>
+        <select id="format"></select>
+    </div>
+
+    <div class="status" id="status">Connecting…</div>
+
+    <script>
+        let ws, piUUID, actionUUID, settings = {};
+        let kind = "image"; // resolved from the action UUID
+
+        function connectElgatoStreamDeckSocket(port, uuid, registerEvent, info, actionInfo) {
+            piUUID = uuid;
+            const ai = JSON.parse(actionInfo);
+            actionUUID = ai.action;
+            kind = actionUUID.endsWith(".record") ? "video" : "image";
+            settings = ai.payload.settings || {};
+            ws = new WebSocket("ws://127.0.0.1:" + port);
+            ws.onopen = () => {
+                ws.send(JSON.stringify({ event: registerEvent, uuid }));
+                initFormats();
+                render();
+                requestAppState();
+                requestDisplays();
+                requestWindows();
+            };
+            ws.onmessage = (e) => {
+                const m = JSON.parse(e.data);
+                if (m.event === "sendToPropertyInspector") onPlugin(m.payload);
+            };
+        }
+        window.connectElgatoStreamDeckSocket = connectElgatoStreamDeckSocket;
+
+        function save() {
+            ws.send(JSON.stringify({ event: "setSettings", context: piUUID, payload: settings }));
+        }
+        function toPlugin(payload) {
+            ws.send(JSON.stringify({ event: "sendToPlugin", action: actionUUID, context: piUUID, payload }));
+        }
+        const requestDisplays = () => toPlugin({ event: "getDisplays" });
+        const requestWindows = () => toPlugin({ event: "getWindows" });
+        const requestAppState = () => toPlugin({ event: "getSettings" });
+
+        function initFormats() {
+            const opts = kind === "video"
+                ? [["", "App default"], ["mp4", "MP4"], ["webp", "WebP"], ["gif", "GIF"]]
+                : [["", "App default"], ["png", "PNG"], ["jpeg", "JPEG"], ["webp", "WebP"]];
+            const sel = document.getElementById("format");
+            sel.innerHTML = opts.map(([v, l]) => `<option value="${v}">${l}</option>`).join("");
+            sel.value = settings.format || "";
+        }
+
+        function onPlugin(p) {
+            if (!p) return;
+            if (p.event === "displays") {
+                const sel = document.getElementById("display");
+                sel.innerHTML = (p.items || []).map(d => `<option value="${d.id}">${d.label}</option>`).join("");
+                if (settings.display) sel.value = settings.display;
+                else if (p.items && p.items[0]) { settings.display = p.items[0].id; save(); }
+            } else if (p.event === "windows") {
+                const sel = document.getElementById("window");
+                sel.innerHTML = (p.items || []).map(w => `<option value="${w.handle}" data-title="${(w.title || '').replace(/"/g, '&quot;')}">${(w.title || '(untitled)')} — ${w.process}</option>`).join("");
+                if (settings.window) sel.value = settings.window;
+            } else if (p.event === "appSettings") {
+                const st = document.getElementById("status");
+                if (!p.connected) { st.textContent = "Snapture isn't running."; st.className = "status warn"; }
+                else { st.textContent = "Connected to Snapture v" + (p.version || "?"); st.className = "status"; }
+                // Prefill format to the app default when the action has no explicit choice yet.
+                if (!settings.format && p.settings) {
+                    const def = kind === "video" ? (p.settings.format || "") : (p.settings.snapshot?.format || "");
+                    // leave "App default" selected; this is informational.
+                }
+            }
+        }
+
+        function render() {
+            const choice = settings.choice || "picker";
+            document.querySelectorAll('input[name=choice]').forEach(r => r.checked = (r.value === choice));
+            show("pickerModeRow", choice === "picker");
+            show("displayRow", choice === "display");
+            show("windowRow", choice === "window");
+            show("formatRow", choice !== "library");
+            document.getElementById("pickerMode").value = settings.pickerMode || "default";
+        }
+        const show = (id, on) => document.getElementById(id).classList.toggle("hidden", !on);
+
+        document.addEventListener("change", (e) => {
+            if (e.target.name === "choice") { settings.choice = e.target.value; render(); save(); }
+            else if (e.target.id === "pickerMode") { settings.pickerMode = e.target.value; save(); }
+            else if (e.target.id === "display") { settings.display = e.target.value; save(); }
+            else if (e.target.id === "window") {
+                settings.window = e.target.value;
+                const opt = e.target.selectedOptions[0];
+                settings.windowTitle = opt ? opt.getAttribute("data-title") : "";
+                save();
+            }
+            else if (e.target.id === "format") { settings.format = e.target.value; save(); }
+        });
+        document.getElementById("refreshWindows").addEventListener("click", requestWindows);
+    </script>
+</body>
+</html>

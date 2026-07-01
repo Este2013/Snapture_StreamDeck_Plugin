@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8" />
+    <style>
+        body { font-family: "Segoe UI", sans-serif; font-size: 13px; color: #d8d8d8; background: #2d2d2d; margin: 0; padding: 12px; }
+        .row { margin-bottom: 12px; }
+        label.h { display: block; color: #969696; font-size: 11px; text-transform: uppercase; letter-spacing: .4px; margin-bottom: 6px; }
+        select { width: 100%; box-sizing: border-box; padding: 6px 8px; background: #3d3d3d; color: #fff; border: 1px solid #555; border-radius: 4px; }
+        .status { font-size: 11px; color: #8a8a8a; border-top: 1px solid #444; padding-top: 8px; }
+        .status.warn { color: #f0a020; }
+    </style>
+</head>
+<body>
+    <div class="row">
+        <label class="h">Open</label>
+        <select id="filter">
+            <option value="any">Any snap</option>
+            <option value="image">Only snapshots</option>
+            <option value="video">Only snaptures</option>
+        </select>
+    </div>
+    <div class="status" id="status">Connecting…</div>
+
+    <script>
+        let ws, piUUID, actionUUID, settings = {};
+
+        function connectElgatoStreamDeckSocket(port, uuid, registerEvent, info, actionInfo) {
+            piUUID = uuid;
+            const ai = JSON.parse(actionInfo);
+            actionUUID = ai.action;
+            settings = ai.payload.settings || {};
+            ws = new WebSocket("ws://127.0.0.1:" + port);
+            ws.onopen = () => {
+                ws.send(JSON.stringify({ event: registerEvent, uuid }));
+                document.getElementById("filter").value = settings.filter || "any";
+                ws.send(JSON.stringify({ event: "sendToPlugin", action: actionUUID, context: piUUID, payload: { event: "getSettings" } }));
+            };
+            ws.onmessage = (e) => {
+                const m = JSON.parse(e.data);
+                if (m.event === "sendToPropertyInspector" && m.payload && m.payload.event === "appSettings") {
+                    const st = document.getElementById("status");
+                    if (!m.payload.connected) { st.textContent = "Snapture isn't running."; st.className = "status warn"; }
+                    else { st.textContent = "Connected to Snapture v" + (m.payload.version || "?"); st.className = "status"; }
+                }
+            };
+        }
+        window.connectElgatoStreamDeckSocket = connectElgatoStreamDeckSocket;
+
+        document.getElementById("filter").addEventListener("change", (e) => {
+            settings.filter = e.target.value;
+            ws.send(JSON.stringify({ event: "setSettings", context: piUUID, payload: settings }));
+        });
+    </script>
+</body>
+</html>

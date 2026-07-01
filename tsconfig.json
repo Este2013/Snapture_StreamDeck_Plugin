@@ -1,0 +1,15 @@
+{
+  "compilerOptions": {
+    "moduleResolution": "bundler",
+    "module": "ES2022",
+    "target": "ES2022",
+    "strict": true,
+    "esModuleInterop": true,
+    "rootDir": "src",
+    "moduleDetection": "force",
+    "skipLibCheck": true,
+    "types": ["node"],
+    "lib": ["ES2022"]
+  },
+  "include": ["src/**/*"]
+}
