@@ -68,12 +68,14 @@ class SnaptureClient extends EventEmitter {
         socket.on("connect", async () => {
             this.connected = true;
             this.emit("connected");
+            this.emit("status");
             try {
                 const r = await this.request("getVersion");
                 this.version = r.data?.version ?? null;
             } catch {
                 this.version = null;
             }
+            this.emit("status"); // version now known
         });
         socket.on("data", (chunk: string) => this.onData(chunk));
         socket.on("error", () => { /* surfaced via close */ });
@@ -97,6 +99,7 @@ class SnaptureClient extends EventEmitter {
         }
         this.pending.clear();
         this.emit("disconnected");
+        this.emit("status");
     }
 
     private scheduleReconnect(): void {

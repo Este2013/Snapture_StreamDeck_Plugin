@@ -9238,6 +9238,7 @@ class SnaptureClient extends EventEmitter$1 {
         socket.on("connect", async () => {
             this.connected = true;
             this.emit("connected");
+            this.emit("status");
             try {
                 const r = await this.request("getVersion");
                 this.version = r.data?.version ?? null;
@@ -9245,6 +9246,7 @@ class SnaptureClient extends EventEmitter$1 {
             catch {
                 this.version = null;
             }
+            this.emit("status"); // version now known
         });
         socket.on("data", (chunk) => this.onData(chunk));
         socket.on("error", () => { });
@@ -9267,6 +9269,7 @@ class SnaptureClient extends EventEmitter$1 {
         }
         this.pending.clear();
         this.emit("disconnected");
+        this.emit("status");
     }
     scheduleReconnect() {
         if (this.reconnectTimer)
@@ -9325,6 +9328,21 @@ const snapture = new SnaptureClient();
 
 /** Minimum Snapture version exposing the plugin's control commands. */
 const MIN_VERSION = "1.1.0";
+const keys = new Map();
+function registerKey(action, type) {
+    keys.set(action.id, { action, type, title: keys.get(action.id)?.title ?? "" });
+}
+function unregisterKey(id) {
+    keys.delete(id);
+}
+function setKeyTitle(id, title) {
+    const k = keys.get(id);
+    if (!k)
+        return;
+    k.title = title;
+    if (!Recording.active)
+        void k.action.setTitle(title); // don't fight the timer
+}
 // ---- shared helpers -------------------------------------------------------
 async function safeRequest(command, args) {
     try {
@@ -9334,8 +9352,7 @@ async function safeRequest(command, args) {
         return null;
     }
 }
-/** Verify Snapture is reachable and new enough; give the user visible feedback if not. */
-async function ensureReady(a, restore) {
+async function ensureReady(a) {
     if (!snapture.isConnected) {
         streamDeck.logger.warn("Snapture is not running / not reachable.");
         await a.showAlert();
@@ -9345,7 +9362,7 @@ async function ensureReady(a, restore) {
         streamDeck.logger.warn(`Snapture ${snapture.version ?? "?"} is older than ${MIN_VERSION}; feature unavailable.`);
         await a.showAlert();
         await a.setTitle(`Update to\nv${MIN_VERSION}`);
-        setTimeout(restore, 2500);
+        setTimeout(() => void a.setTitle(keys.get(a.id)?.title ?? ""), 2500);
         return false;
     }
     return true;
@@ -9359,12 +9376,25 @@ function formatElapsed(seconds) {
     return h > 0 ? `${h}:${pad(m)}:${pad(sec)}` : `${pad(m)}:${pad(sec)}`;
 }
 // ---- capture actions (Snapshot / Snapture) --------------------------------
-/** Base for the two capture actions; `kind` decides snapshot vs. recording. */
 class CaptureAction extends SingletonAction {
+    get keyType() { return this.kind === "video" ? "record" : "snapshot"; }
+    onWillAppear(ev) {
+        registerKey(ev.action, this.keyType);
+        if (this.kind === "video" && Recording.active)
+            Recording.paint(ev.action);
+    }
+    onWillDisappear(ev) {
+        unregisterKey(ev.action.id);
+    }
+    onTitleParametersDidChange(ev) {
+        setKeyTitle(ev.action.id, ev.payload.title);
+    }
+    onSendToPlugin(ev) {
+        return handlePropertyInspectorRequest(ev);
+    }
     async onKeyDown(ev) {
         const s = ev.payload.settings;
-        const restore = () => void ev.action.setTitle(RecordingState.userTitle(ev.action.id) ?? "");
-        if (!(await ensureReady(ev.action, restore)))
+        if (!(await ensureReady(ev.action)))
             return;
         const cmd = this.kind === "video" ? "start" : "snapshot";
         const format = s.format || undefined;
@@ -9399,9 +9429,6 @@ class CaptureAction extends SingletonAction {
             streamDeck.logger.warn(`Snapture command failed: ${res?.error ?? "no response"}`);
             await ev.action.showAlert();
         }
-    }
-    onSendToPlugin(ev) {
-        return handlePropertyInspectorRequest(ev);
     }
 }
 let SnapshotAction = (() => {
@@ -9439,14 +9466,13 @@ let RecordAction = (() => {
             __runInitializers(_classThis, _classExtraInitializers);
         }
         kind = "video";
-        onWillAppear(ev) {
-            RecordingState.add(ev.action);
-        }
-        onWillDisappear(ev) {
-            RecordingState.remove(ev.action.id);
-        }
-        onTitleParametersDidChange(ev) {
-            RecordingState.setUserTitle(ev.action.id, ev.payload.title);
+        async onKeyDown(ev) {
+            // Pressing while recording stops the recording.
+            if (snapture.isConnected && snapture.state === "recording") {
+                await safeRequest("stop");
+                return;
+            }
+            await super.onKeyDown(ev);
         }
     });
     return _classThis;
@@ -9466,23 +9492,32 @@ let OpenLastAction = (() => {
             if (_metadata) Object.defineProperty(_classThis, Symbol.metadata, { enumerable: true, configurable: true, writable: true, value: _metadata });
             __runInitializers(_classThis, _classExtraInitializers);
         }
+        onWillAppear(ev) {
+            registerKey(ev.action, "openlast");
+        }
+        onWillDisappear(ev) {
+            unregisterKey(ev.action.id);
+        }
+        onTitleParametersDidChange(ev) {
+            setKeyTitle(ev.action.id, ev.payload.title);
+        }
+        onSendToPlugin(ev) {
+            return handlePropertyInspectorRequest(ev);
+        }
         async onKeyDown(ev) {
-            const restore = () => void ev.action.setTitle("");
-            if (!(await ensureReady(ev.action, restore)))
+            if (!(await ensureReady(ev.action)))
                 return;
-            const res = await safeRequest("openLast", { filter: ev.payload.settings.filter || "any" });
+            const s = ev.payload.settings;
+            const res = await safeRequest("openLast", { filter: s.filter || "any", action: s.mode || "reveal" });
             if (!res || !res.ok)
                 await ev.action.showAlert();
             else
                 await ev.action.showOk();
         }
-        onSendToPlugin(ev) {
-            return handlePropertyInspectorRequest(ev);
-        }
     });
     return _classThis;
 })();
-// ---- Property Inspector data ----------------------------------------------
+// ---- Property Inspector data + live status --------------------------------
 async function handlePropertyInspectorRequest(ev) {
     const req = ev.payload?.event;
     if (!req)
@@ -9495,6 +9530,9 @@ async function handlePropertyInspectorRequest(ev) {
         const r = await safeRequest("getWindows");
         await streamDeck.ui.sendToPropertyInspector({ event: "windows", items: r?.data?.windows ?? [] });
     }
+    else if (req === "identify") {
+        await safeRequest("identifyDisplays");
+    }
     else if (req === "getSettings") {
         const r = await safeRequest("getSettings");
         await streamDeck.ui.sendToPropertyInspector({
@@ -9505,85 +9543,83 @@ async function handlePropertyInspectorRequest(ev) {
         });
     }
 }
+function pushStatus() {
+    void streamDeck.ui.sendToPropertyInspector({
+        event: "appSettings",
+        connected: snapture.isConnected,
+        version: snapture.version,
+        settings: null,
+    });
+}
 // ---- recording visuals (red + pulse + timer) ------------------------------
 const PULSE_FRAMES = ["imgs/state/rec0.png", "imgs/state/rec1.png", "imgs/state/rec2.png", "imgs/state/rec1.png"];
-/** Drives every visible Snapture (video) key while recording. */
-class RecordingStateManager {
-    actions = new Map();
-    pulseTimer = null;
-    pulseIndex = 0;
-    lastSeconds = 0;
-    recording = false;
-    add(action) {
-        this.actions.set(action.id, { action, userTitle: this.actions.get(action.id)?.userTitle ?? "" });
-        if (this.recording)
-            this.paint(action, this.pulseIndex);
-    }
-    remove(id) {
-        this.actions.delete(id);
-    }
-    setUserTitle(id, title) {
-        const entry = this.actions.get(id);
-        if (entry)
-            entry.userTitle = title;
-        // While recording we own the title, so don't clobber the timer.
-        if (!this.recording && entry)
-            void entry.action.setTitle(title);
-    }
-    userTitle(id) {
-        return this.actions.get(id)?.userTitle;
-    }
+const Recording = {
+    active: false,
+    timer: null,
+    frame: 0,
+    seconds: 0,
+    recordKeys() {
+        return [...keys.values()].filter((k) => k.type === "record");
+    },
+    paint(actionOrIndex) {
+        void actionOrIndex.setImage(PULSE_FRAMES[this.frame]);
+    },
     onEvent(state, seconds) {
         const nowRecording = state === "recording";
         if (typeof seconds === "number")
-            this.lastSeconds = seconds;
-        if (nowRecording && !this.recording)
-            this.startPulse();
-        else if (!nowRecording && this.recording)
-            this.stopPulse();
-        this.recording = nowRecording;
-        if (this.recording)
-            this.updateTimerLabels();
-    }
-    startPulse() {
-        this.pulseIndex = 0;
-        this.pulseTimer = setInterval(() => {
-            this.pulseIndex = (this.pulseIndex + 1) % PULSE_FRAMES.length;
-            for (const { action } of this.actions.values())
-                this.paint(action, this.pulseIndex);
+            this.seconds = seconds;
+        if (nowRecording && !this.active)
+            this.start();
+        else if (!nowRecording && this.active)
+            this.stop();
+        this.active = nowRecording;
+        if (this.active) {
+            const label = formatElapsed(this.seconds);
+            for (const k of this.recordKeys())
+                void k.action.setTitle(label);
+        }
+    },
+    start() {
+        this.frame = 0;
+        this.timer = setInterval(() => {
+            this.frame = (this.frame + 1) % PULSE_FRAMES.length;
+            for (const k of this.recordKeys())
+                this.paint(k.action);
         }, 450);
-    }
-    stopPulse() {
-        if (this.pulseTimer) {
-            clearInterval(this.pulseTimer);
-            this.pulseTimer = null;
+    },
+    stop() {
+        if (this.timer) {
+            clearInterval(this.timer);
+            this.timer = null;
         }
-        for (const { action, userTitle } of this.actions.values()) {
-            void action.setImage(); // reset to manifest default
-            void action.setTitle(userTitle ?? "");
+        for (const k of this.recordKeys()) {
+            void k.action.setImage(); // reset to manifest default
+            void k.action.setTitle(k.title); // restore the user's title
         }
-    }
-    paint(action, frame) {
-        void action.setImage(PULSE_FRAMES[frame]);
-    }
-    updateTimerLabels() {
-        const label = formatElapsed(this.lastSeconds);
-        for (const { action } of this.actions.values())
-            void action.setTitle(label);
+    },
+};
+// ---- ping (flash a message on every visible key) --------------------------
+function flashPing() {
+    for (const k of keys.values()) {
+        if (Recording.active && k.type === "record")
+            continue; // don't disturb the timer
+        void k.action.setTitle("👋\nSnapture");
+        setTimeout(() => void k.action.setTitle(k.title), 1000);
     }
 }
-const RecordingState = new RecordingStateManager();
 // ---- bootstrap ------------------------------------------------------------
-streamDeck.logger.setLevel(streamDeck.logger.level);
 snapture.on("event", (evt) => {
     if (evt.event === "stateChanged")
-        RecordingState.onEvent(evt.state ?? "idle");
+        Recording.onEvent(evt.state ?? "idle");
     else if (evt.event === "elapsed")
-        RecordingState.onEvent(evt.state ?? "recording", evt.data?.seconds);
+        Recording.onEvent(evt.state ?? "recording", evt.data?.seconds);
     else if (evt.event === "recordingCompleted")
-        RecordingState.onEvent("idle");
+        Recording.onEvent("idle");
+    else if (evt.event === "ping")
+        flashPing();
 });
-snapture.on("disconnected", () => RecordingState.onEvent("idle"));
+snapture.on("disconnected", () => Recording.onEvent("idle"));
+snapture.on("status", pushStatus);
 streamDeck.actions.registerAction(new SnapshotAction());
 streamDeck.actions.registerAction(new RecordAction());
 streamDeck.actions.registerAction(new OpenLastAction());

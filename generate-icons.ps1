@@ -23,6 +23,10 @@ $ring = { param($g, $s)
     $pen = New-Object System.Drawing.Pen($red, [float]($s * 0.13)); $i = [float]($s * 0.2); $d = [float]($s - 2 * $i)
     $g.DrawEllipse($pen, $i, $i, $d, $d); $pen.Dispose()
 }
+$whiteRing = { param($g, $s)
+    $pen = New-Object System.Drawing.Pen([System.Drawing.Color]::White, [float]($s * 0.13)); $i = [float]($s * 0.2); $d = [float]($s - 2 * $i)
+    $g.DrawEllipse($pen, $i, $i, $d, $d); $pen.Dispose()
+}
 $scan = { param($g, $s)
     $pen = New-Object System.Drawing.Pen([System.Drawing.Color]::White, [float]($s * 0.09))
     $pen.StartCap = 'Round'; $pen.EndCap = 'Round'
@@ -59,11 +63,13 @@ $rec0 = { param($g, $s) RecFrame $g $s 0.12 }
 $rec1 = { param($g, $s) RecFrame $g $s 0.18 }
 $rec2 = { param($g, $s) RecFrame $g $s 0.24 }
 
-Save-Icon "plugin"          $ring
-Save-Icon "category"        $ring
-Save-Icon "actions/record"  $ring
-Save-Icon "actions/snapshot" $scan
-Save-Icon "actions/openlast" $folder
+# Sidebar icons (category + action list) must be monochrome; keys may be colored.
+Save-Icon "plugin"           $ring        # marketplace / plugin icon (colour ok)
+Save-Icon "category"         $whiteRing   # sidebar — monochrome
+Save-Icon "actions/record"   $whiteRing   # sidebar action icon — monochrome
+Save-Icon "actions/record_key" $ring      # key state image — red ring
+Save-Icon "actions/snapshot" $scan        # white (monochrome)
+Save-Icon "actions/openlast" $folder      # white (monochrome)
 Save-Icon "state/rec0" $rec0
 Save-Icon "state/rec1" $rec1
 Save-Icon "state/rec2" $rec2

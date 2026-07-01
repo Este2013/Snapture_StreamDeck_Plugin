@@ -6,13 +6,18 @@
         body { font-family: "Segoe UI", sans-serif; font-size: 13px; color: #d8d8d8; background: #2d2d2d; margin: 0; padding: 12px; }
         .row { margin-bottom: 12px; }
         label.h { display: block; color: #969696; font-size: 11px; text-transform: uppercase; letter-spacing: .4px; margin-bottom: 6px; }
-        select, .btn { width: 100%; box-sizing: border-box; padding: 6px 8px; background: #3d3d3d; color: #fff; border: 1px solid #555; border-radius: 4px; }
+        select, .btn { box-sizing: border-box; padding: 6px 8px; background: #3d3d3d; color: #fff; border: 1px solid #555; border-radius: 4px; }
+        select { width: 100%; }
         .radios label { display: block; padding: 4px 0; cursor: pointer; }
         .hidden { display: none; }
         .status { font-size: 11px; color: #8a8a8a; border-top: 1px solid #444; padding-top: 8px; }
         .status.warn { color: #f0a020; }
         .inline { display: flex; gap: 8px; }
-        .inline .btn { width: auto; cursor: pointer; }
+        .btn { cursor: pointer; }
+        .seg { display: flex; border: 1px solid #555; border-radius: 5px; overflow: hidden; }
+        .seg button { flex: 1; background: #3d3d3d; color: #cfcfcf; border: none; border-right: 1px solid #555; padding: 7px 4px; cursor: pointer; font-size: 12px; }
+        .seg button:last-child { border-right: none; }
+        .seg button.active { background: #0a84ff; color: #fff; }
     </style>
 </head>
 <body>
@@ -27,17 +32,15 @@
 
     <div class="row hidden" id="pickerModeRow">
         <label class="h">Starting selection</label>
-        <select id="pickerMode">
-            <option value="default">Default</option>
-            <option value="display">Display</option>
-            <option value="window">Window</option>
-            <option value="custom">Custom</option>
-        </select>
+        <div class="seg" id="pickerMode"></div>
     </div>
 
     <div class="row hidden" id="displayRow">
         <label class="h">Display</label>
-        <select id="display"></select>
+        <div class="inline">
+            <select id="display"></select>
+            <button class="btn" id="identify" title="Show each display's number on screen">🔍</button>
+        </div>
     </div>
 
     <div class="row hidden" id="windowRow">
@@ -50,14 +53,20 @@
 
     <div class="row hidden" id="formatRow">
         <label class="h">Format</label>
-        <select id="format"></select>
+        <div class="seg" id="format"></div>
     </div>
 
     <div class="status" id="status">Connecting…</div>
 
     <script>
         let ws, piUUID, actionUUID, settings = {};
-        let kind = "image"; // resolved from the action UUID
+        let kind = "image";
+
+        const FORMATS = {
+            video: [["", "Default"], ["mp4", "MP4"], ["webp", "WebP"], ["gif", "GIF"]],
+            image: [["", "Default"], ["png", "PNG"], ["jpeg", "JPEG"], ["webp", "WebP"]],
+        };
+        const PICKER_MODES = [["default", "Default"], ["display", "Display"], ["window", "Window"], ["custom", "Custom"]];
 
         function connectElgatoStreamDeckSocket(port, uuid, registerEvent, info, actionInfo) {
             piUUID = uuid;
@@ -68,11 +77,11 @@
             ws = new WebSocket("ws://127.0.0.1:" + port);
             ws.onopen = () => {
                 ws.send(JSON.stringify({ event: registerEvent, uuid }));
-                initFormats();
+                buildSegments();
                 render();
-                requestAppState();
-                requestDisplays();
-                requestWindows();
+                toPlugin({ event: "getSettings" });
+                toPlugin({ event: "getDisplays" });
+                toPlugin({ event: "getWindows" });
             };
             ws.onmessage = (e) => {
                 const m = JSON.parse(e.data);
@@ -81,23 +90,27 @@
         }
         window.connectElgatoStreamDeckSocket = connectElgatoStreamDeckSocket;
 
-        function save() {
-            ws.send(JSON.stringify({ event: "setSettings", context: piUUID, payload: settings }));
-        }
-        function toPlugin(payload) {
-            ws.send(JSON.stringify({ event: "sendToPlugin", action: actionUUID, context: piUUID, payload }));
-        }
-        const requestDisplays = () => toPlugin({ event: "getDisplays" });
-        const requestWindows = () => toPlugin({ event: "getWindows" });
-        const requestAppState = () => toPlugin({ event: "getSettings" });
+        const save = () => ws.send(JSON.stringify({ event: "setSettings", context: piUUID, payload: settings }));
+        const toPlugin = (payload) => ws.send(JSON.stringify({ event: "sendToPlugin", action: actionUUID, context: piUUID, payload }));
 
-        function initFormats() {
-            const opts = kind === "video"
-                ? [["", "App default"], ["mp4", "MP4"], ["webp", "WebP"], ["gif", "GIF"]]
-                : [["", "App default"], ["png", "PNG"], ["jpeg", "JPEG"], ["webp", "WebP"]];
-            const sel = document.getElementById("format");
-            sel.innerHTML = opts.map(([v, l]) => `<option value="${v}">${l}</option>`).join("");
-            sel.value = settings.format || "";
+        function seg(container, options, value, onPick) {
+            container.innerHTML = "";
+            for (const [v, label] of options) {
+                const b = document.createElement("button");
+                b.textContent = label;
+                if (v === value) b.classList.add("active");
+                b.onclick = () => {
+                    [...container.children].forEach(c => c.classList.remove("active"));
+                    b.classList.add("active");
+                    onPick(v);
+                };
+                container.appendChild(b);
+            }
+        }
+
+        function buildSegments() {
+            seg(document.getElementById("pickerMode"), PICKER_MODES, settings.pickerMode || "default", v => { settings.pickerMode = v; save(); });
+            seg(document.getElementById("format"), FORMATS[kind], settings.format || "", v => { settings.format = v; save(); });
         }
 
         function onPlugin(p) {
@@ -115,11 +128,6 @@
                 const st = document.getElementById("status");
                 if (!p.connected) { st.textContent = "Snapture isn't running."; st.className = "status warn"; }
                 else { st.textContent = "Connected to Snapture v" + (p.version || "?"); st.className = "status"; }
-                // Prefill format to the app default when the action has no explicit choice yet.
-                if (!settings.format && p.settings) {
-                    const def = kind === "video" ? (p.settings.format || "") : (p.settings.snapshot?.format || "");
-                    // leave "App default" selected; this is informational.
-                }
             }
         }
 
@@ -130,13 +138,11 @@
             show("displayRow", choice === "display");
             show("windowRow", choice === "window");
             show("formatRow", choice !== "library");
-            document.getElementById("pickerMode").value = settings.pickerMode || "default";
         }
         const show = (id, on) => document.getElementById(id).classList.toggle("hidden", !on);
 
         document.addEventListener("change", (e) => {
             if (e.target.name === "choice") { settings.choice = e.target.value; render(); save(); }
-            else if (e.target.id === "pickerMode") { settings.pickerMode = e.target.value; save(); }
             else if (e.target.id === "display") { settings.display = e.target.value; save(); }
             else if (e.target.id === "window") {
                 settings.window = e.target.value;
@@ -144,9 +150,9 @@
                 settings.windowTitle = opt ? opt.getAttribute("data-title") : "";
                 save();
             }
-            else if (e.target.id === "format") { settings.format = e.target.value; save(); }
         });
-        document.getElementById("refreshWindows").addEventListener("click", requestWindows);
+        document.getElementById("refreshWindows").addEventListener("click", () => toPlugin({ event: "getWindows" }));
+        document.getElementById("identify").addEventListener("click", () => toPlugin({ event: "identify" }));
     </script>
 </body>
 </html>

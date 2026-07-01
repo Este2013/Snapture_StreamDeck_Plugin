@@ -15,18 +15,40 @@ const MIN_VERSION = "1.1.0";
 type Kind = "image" | "video";
 
 interface CaptureSettings extends JsonObject {
-    /** picker | display | window | repeat | library */
-    choice?: string;
-    /** default | display | window | custom (for the picker choice) */
-    pickerMode?: string;
-    display?: string; // display id (device name)
-    window?: string; // window handle (string)
-    windowTitle?: string; // resolved fallback
-    format?: string; // per-shot format override
+    choice?: string; // picker | display | window | repeat | library
+    pickerMode?: string; // default | display | window | custom
+    display?: string;
+    window?: string;
+    windowTitle?: string;
+    format?: string;
 }
 
 interface OpenLastSettings extends JsonObject {
     filter?: string; // any | image | video
+    mode?: string; // reveal | open
+}
+
+// ---- shared visible-key registry (for recording visuals + ping) -----------
+
+type KeyType = "snapshot" | "record" | "openlast";
+interface VisibleKey {
+    action: any;
+    type: KeyType;
+    title: string;
+}
+const keys = new Map<string, VisibleKey>();
+
+function registerKey(action: any, type: KeyType): void {
+    keys.set(action.id, { action, type, title: keys.get(action.id)?.title ?? "" });
+}
+function unregisterKey(id: string): void {
+    keys.delete(id);
+}
+function setKeyTitle(id: string, title: string): void {
+    const k = keys.get(id);
+    if (!k) return;
+    k.title = title;
+    if (!Recording.active) void k.action.setTitle(title); // don't fight the timer
 }
 
 // ---- shared helpers -------------------------------------------------------
@@ -39,8 +61,7 @@ async function safeRequest(command: string, args?: Record<string, unknown>) {
     }
 }
 
-/** Verify Snapture is reachable and new enough; give the user visible feedback if not. */
-async function ensureReady(a: { showAlert(): Promise<void>; setTitle(t: string): Promise<void> }, restore: () => void): Promise<boolean> {
+async function ensureReady(a: { showAlert(): Promise<void>; setTitle(t: string): Promise<void>; id: string }): Promise<boolean> {
     if (!snapture.isConnected) {
         streamDeck.logger.warn("Snapture is not running / not reachable.");
         await a.showAlert();
@@ -50,7 +71,7 @@ async function ensureReady(a: { showAlert(): Promise<void>; setTitle(t: string):
         streamDeck.logger.warn(`Snapture ${snapture.version ?? "?"} is older than ${MIN_VERSION}; feature unavailable.`);
         await a.showAlert();
         await a.setTitle(`Update to\nv${MIN_VERSION}`);
-        setTimeout(restore, 2500);
+        setTimeout(() => void a.setTitle(keys.get(a.id)?.title ?? ""), 2500);
         return false;
     }
     return true;
@@ -67,14 +88,27 @@ function formatElapsed(seconds: number): string {
 
 // ---- capture actions (Snapshot / Snapture) --------------------------------
 
-/** Base for the two capture actions; `kind` decides snapshot vs. recording. */
 abstract class CaptureAction extends SingletonAction<CaptureSettings> {
     protected abstract readonly kind: Kind;
+    private get keyType(): KeyType { return this.kind === "video" ? "record" : "snapshot"; }
+
+    override onWillAppear(ev: WillAppearEvent<CaptureSettings>): void {
+        registerKey(ev.action, this.keyType);
+        if (this.kind === "video" && Recording.active) Recording.paint(ev.action);
+    }
+    override onWillDisappear(ev: WillDisappearEvent<CaptureSettings>): void {
+        unregisterKey(ev.action.id);
+    }
+    override onTitleParametersDidChange(ev: TitleParametersDidChangeEvent<CaptureSettings>): void {
+        setKeyTitle(ev.action.id, ev.payload.title);
+    }
+    override onSendToPlugin(ev: SendToPluginEvent<JsonObject, CaptureSettings>): Promise<void> | void {
+        return handlePropertyInspectorRequest(ev);
+    }
 
     override async onKeyDown(ev: KeyDownEvent<CaptureSettings>): Promise<void> {
         const s = ev.payload.settings;
-        const restore = () => void ev.action.setTitle(RecordingState.userTitle(ev.action.id) ?? "");
-        if (!(await ensureReady(ev.action, restore))) return;
+        if (!(await ensureReady(ev.action))) return;
 
         const cmd = this.kind === "video" ? "start" : "snapshot";
         const format = s.format || undefined;
@@ -106,10 +140,6 @@ abstract class CaptureAction extends SingletonAction<CaptureSettings> {
             await ev.action.showAlert();
         }
     }
-
-    override onSendToPlugin(ev: SendToPluginEvent<JsonObject, CaptureSettings>): Promise<void> | void {
-        return handlePropertyInspectorRequest(ev);
-    }
 }
 
 @action({ UUID: "com.este.snapture.snapshot" })
@@ -121,36 +151,41 @@ export class SnapshotAction extends CaptureAction {
 export class RecordAction extends CaptureAction {
     protected readonly kind: Kind = "video";
 
-    override onWillAppear(ev: WillAppearEvent<CaptureSettings>): void {
-        RecordingState.add(ev.action);
-    }
-
-    override onWillDisappear(ev: WillDisappearEvent<CaptureSettings>): void {
-        RecordingState.remove(ev.action.id);
-    }
-
-    override onTitleParametersDidChange(ev: TitleParametersDidChangeEvent<CaptureSettings>): void {
-        RecordingState.setUserTitle(ev.action.id, ev.payload.title);
+    override async onKeyDown(ev: KeyDownEvent<CaptureSettings>): Promise<void> {
+        // Pressing while recording stops the recording.
+        if (snapture.isConnected && snapture.state === "recording") {
+            await safeRequest("stop");
+            return;
+        }
+        await super.onKeyDown(ev);
     }
 }
 
 @action({ UUID: "com.este.snapture.openlast" })
 export class OpenLastAction extends SingletonAction<OpenLastSettings> {
-    override async onKeyDown(ev: KeyDownEvent<OpenLastSettings>): Promise<void> {
-        const restore = () => void ev.action.setTitle("");
-        if (!(await ensureReady(ev.action, restore))) return;
-
-        const res = await safeRequest("openLast", { filter: ev.payload.settings.filter || "any" });
-        if (!res || !res.ok) await ev.action.showAlert();
-        else await ev.action.showOk();
+    override onWillAppear(ev: WillAppearEvent<OpenLastSettings>): void {
+        registerKey(ev.action, "openlast");
     }
-
+    override onWillDisappear(ev: WillDisappearEvent<OpenLastSettings>): void {
+        unregisterKey(ev.action.id);
+    }
+    override onTitleParametersDidChange(ev: TitleParametersDidChangeEvent<OpenLastSettings>): void {
+        setKeyTitle(ev.action.id, ev.payload.title);
+    }
     override onSendToPlugin(ev: SendToPluginEvent<JsonObject, OpenLastSettings>): Promise<void> | void {
         return handlePropertyInspectorRequest(ev);
     }
+
+    override async onKeyDown(ev: KeyDownEvent<OpenLastSettings>): Promise<void> {
+        if (!(await ensureReady(ev.action))) return;
+        const s = ev.payload.settings;
+        const res = await safeRequest("openLast", { filter: s.filter || "any", action: s.mode || "reveal" });
+        if (!res || !res.ok) await ev.action.showAlert();
+        else await ev.action.showOk();
+    }
 }
 
-// ---- Property Inspector data ----------------------------------------------
+// ---- Property Inspector data + live status --------------------------------
 
 async function handlePropertyInspectorRequest(ev: SendToPluginEvent<JsonObject, JsonObject>): Promise<void> {
     const req = (ev.payload as { event?: string })?.event;
@@ -162,6 +197,8 @@ async function handlePropertyInspectorRequest(ev: SendToPluginEvent<JsonObject, 
     } else if (req === "getWindows") {
         const r = await safeRequest("getWindows");
         await streamDeck.ui.sendToPropertyInspector({ event: "windows", items: r?.data?.windows ?? [] });
+    } else if (req === "identify") {
+        await safeRequest("identifyDisplays");
     } else if (req === "getSettings") {
         const r = await safeRequest("getSettings");
         await streamDeck.ui.sendToPropertyInspector({
@@ -173,87 +210,84 @@ async function handlePropertyInspectorRequest(ev: SendToPluginEvent<JsonObject, 
     }
 }
 
+function pushStatus(): void {
+    void streamDeck.ui.sendToPropertyInspector({
+        event: "appSettings",
+        connected: snapture.isConnected,
+        version: snapture.version,
+        settings: null,
+    });
+}
+
 // ---- recording visuals (red + pulse + timer) ------------------------------
 
 const PULSE_FRAMES = ["imgs/state/rec0.png", "imgs/state/rec1.png", "imgs/state/rec2.png", "imgs/state/rec1.png"];
 
-/** Drives every visible Snapture (video) key while recording. */
-class RecordingStateManager {
-    private readonly actions = new Map<string, { action: any; userTitle: string }>();
-    private pulseTimer: NodeJS.Timeout | null = null;
-    private pulseIndex = 0;
-    private lastSeconds = 0;
-    private recording = false;
+const Recording = {
+    active: false,
+    timer: null as NodeJS.Timeout | null,
+    frame: 0,
+    seconds: 0,
 
-    add(action: any): void {
-        this.actions.set(action.id, { action, userTitle: this.actions.get(action.id)?.userTitle ?? "" });
-        if (this.recording) this.paint(action, this.pulseIndex);
-    }
+    recordKeys(): VisibleKey[] {
+        return [...keys.values()].filter((k) => k.type === "record");
+    },
 
-    remove(id: string): void {
-        this.actions.delete(id);
-    }
-
-    setUserTitle(id: string, title: string): void {
-        const entry = this.actions.get(id);
-        if (entry) entry.userTitle = title;
-        // While recording we own the title, so don't clobber the timer.
-        if (!this.recording && entry) void entry.action.setTitle(title);
-    }
-
-    userTitle(id: string): string | undefined {
-        return this.actions.get(id)?.userTitle;
-    }
+    paint(actionOrIndex: any): void {
+        void actionOrIndex.setImage(PULSE_FRAMES[this.frame]);
+    },
 
     onEvent(state: string, seconds?: number): void {
         const nowRecording = state === "recording";
-        if (typeof seconds === "number") this.lastSeconds = seconds;
+        if (typeof seconds === "number") this.seconds = seconds;
 
-        if (nowRecording && !this.recording) this.startPulse();
-        else if (!nowRecording && this.recording) this.stopPulse();
+        if (nowRecording && !this.active) this.start();
+        else if (!nowRecording && this.active) this.stop();
 
-        this.recording = nowRecording;
-        if (this.recording) this.updateTimerLabels();
-    }
-
-    private startPulse(): void {
-        this.pulseIndex = 0;
-        this.pulseTimer = setInterval(() => {
-            this.pulseIndex = (this.pulseIndex + 1) % PULSE_FRAMES.length;
-            for (const { action } of this.actions.values()) this.paint(action, this.pulseIndex);
-        }, 450);
-    }
-
-    private stopPulse(): void {
-        if (this.pulseTimer) { clearInterval(this.pulseTimer); this.pulseTimer = null; }
-        for (const { action, userTitle } of this.actions.values()) {
-            void action.setImage(); // reset to manifest default
-            void action.setTitle(userTitle ?? "");
+        this.active = nowRecording;
+        if (this.active) {
+            const label = formatElapsed(this.seconds);
+            for (const k of this.recordKeys()) void k.action.setTitle(label);
         }
-    }
+    },
 
-    private paint(action: any, frame: number): void {
-        void action.setImage(PULSE_FRAMES[frame]);
-    }
+    start(): void {
+        this.frame = 0;
+        this.timer = setInterval(() => {
+            this.frame = (this.frame + 1) % PULSE_FRAMES.length;
+            for (const k of this.recordKeys()) this.paint(k.action);
+        }, 450);
+    },
 
-    private updateTimerLabels(): void {
-        const label = formatElapsed(this.lastSeconds);
-        for (const { action } of this.actions.values()) void action.setTitle(label);
+    stop(): void {
+        if (this.timer) { clearInterval(this.timer); this.timer = null; }
+        for (const k of this.recordKeys()) {
+            void k.action.setImage();       // reset to manifest default
+            void k.action.setTitle(k.title); // restore the user's title
+        }
+    },
+};
+
+// ---- ping (flash a message on every visible key) --------------------------
+
+function flashPing(): void {
+    for (const k of keys.values()) {
+        if (Recording.active && k.type === "record") continue; // don't disturb the timer
+        void k.action.setTitle("👋\nSnapture");
+        setTimeout(() => void k.action.setTitle(k.title), 1000);
     }
 }
 
-const RecordingState = new RecordingStateManager();
-
 // ---- bootstrap ------------------------------------------------------------
 
-streamDeck.logger.setLevel(streamDeck.logger.level);
-
 snapture.on("event", (evt: { event: string; state?: string; data?: any }) => {
-    if (evt.event === "stateChanged") RecordingState.onEvent(evt.state ?? "idle");
-    else if (evt.event === "elapsed") RecordingState.onEvent(evt.state ?? "recording", evt.data?.seconds);
-    else if (evt.event === "recordingCompleted") RecordingState.onEvent("idle");
+    if (evt.event === "stateChanged") Recording.onEvent(evt.state ?? "idle");
+    else if (evt.event === "elapsed") Recording.onEvent(evt.state ?? "recording", evt.data?.seconds);
+    else if (evt.event === "recordingCompleted") Recording.onEvent("idle");
+    else if (evt.event === "ping") flashPing();
 });
-snapture.on("disconnected", () => RecordingState.onEvent("idle"));
+snapture.on("disconnected", () => Recording.onEvent("idle"));
+snapture.on("status", pushStatus);
 
 streamDeck.actions.registerAction(new SnapshotAction());
 streamDeck.actions.registerAction(new RecordAction());

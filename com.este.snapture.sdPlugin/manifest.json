@@ -31,7 +31,7 @@
             "Tooltip": "Record the screen with Snapture.",
             "Controllers": ["Keypad"],
             "PropertyInspectorPath": "ui/capture.html",
-            "States": [{ "Image": "imgs/actions/record", "TitleAlignment": "bottom" }]
+            "States": [{ "Image": "imgs/actions/record_key", "TitleAlignment": "bottom" }]
         },
         {
             "Name": "Open last snap",

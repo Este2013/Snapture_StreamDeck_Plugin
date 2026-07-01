@@ -6,24 +6,29 @@
         body { font-family: "Segoe UI", sans-serif; font-size: 13px; color: #d8d8d8; background: #2d2d2d; margin: 0; padding: 12px; }
         .row { margin-bottom: 12px; }
         label.h { display: block; color: #969696; font-size: 11px; text-transform: uppercase; letter-spacing: .4px; margin-bottom: 6px; }
-        select { width: 100%; box-sizing: border-box; padding: 6px 8px; background: #3d3d3d; color: #fff; border: 1px solid #555; border-radius: 4px; }
         .status { font-size: 11px; color: #8a8a8a; border-top: 1px solid #444; padding-top: 8px; }
         .status.warn { color: #f0a020; }
+        .seg { display: flex; border: 1px solid #555; border-radius: 5px; overflow: hidden; }
+        .seg button { flex: 1; background: #3d3d3d; color: #cfcfcf; border: none; border-right: 1px solid #555; padding: 7px 4px; cursor: pointer; font-size: 12px; }
+        .seg button:last-child { border-right: none; }
+        .seg button.active { background: #0a84ff; color: #fff; }
     </style>
 </head>
 <body>
     <div class="row">
-        <label class="h">Open</label>
-        <select id="filter">
-            <option value="any">Any snap</option>
-            <option value="image">Only snapshots</option>
-            <option value="video">Only snaptures</option>
-        </select>
+        <label class="h">Which capture</label>
+        <div class="seg" id="filter"></div>
+    </div>
+    <div class="row">
+        <label class="h">Action</label>
+        <div class="seg" id="mode"></div>
     </div>
     <div class="status" id="status">Connecting…</div>
 
     <script>
         let ws, piUUID, actionUUID, settings = {};
+        const FILTERS = [["any", "Any"], ["image", "Snapshots"], ["video", "Snaptures"]];
+        const MODES = [["reveal", "Open in folder"], ["open", "Open the file"]];
 
         function connectElgatoStreamDeckSocket(port, uuid, registerEvent, info, actionInfo) {
             piUUID = uuid;
@@ -33,7 +38,8 @@
             ws = new WebSocket("ws://127.0.0.1:" + port);
             ws.onopen = () => {
                 ws.send(JSON.stringify({ event: registerEvent, uuid }));
-                document.getElementById("filter").value = settings.filter || "any";
+                seg(document.getElementById("filter"), FILTERS, settings.filter || "any", v => { settings.filter = v; save(); });
+                seg(document.getElementById("mode"), MODES, settings.mode || "reveal", v => { settings.mode = v; save(); });
                 ws.send(JSON.stringify({ event: "sendToPlugin", action: actionUUID, context: piUUID, payload: { event: "getSettings" } }));
             };
             ws.onmessage = (e) => {
@@ -47,10 +53,22 @@
         }
         window.connectElgatoStreamDeckSocket = connectElgatoStreamDeckSocket;
 
-        document.getElementById("filter").addEventListener("change", (e) => {
-            settings.filter = e.target.value;
-            ws.send(JSON.stringify({ event: "setSettings", context: piUUID, payload: settings }));
-        });
+        const save = () => ws.send(JSON.stringify({ event: "setSettings", context: piUUID, payload: settings }));
+
+        function seg(container, options, value, onPick) {
+            container.innerHTML = "";
+            for (const [v, label] of options) {
+                const b = document.createElement("button");
+                b.textContent = label;
+                if (v === value) b.classList.add("active");
+                b.onclick = () => {
+                    [...container.children].forEach(c => c.classList.remove("active"));
+                    b.classList.add("active");
+                    onPick(v);
+                };
+                container.appendChild(b);
+            }
+        }
     </script>
 </body>
 </html>
