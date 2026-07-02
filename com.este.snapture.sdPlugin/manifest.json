@@ -1,46 +1,76 @@
 {
-    "$schema": "https://schemas.elgato.com/streamdeck/plugins/manifest.json",
-    "Name": "Snapture",
-    "Version": "1.0.0.0",
-    "Author": "Este2013",
-    "Description": "Capture snapshots and screen recordings with Snapture.",
-    "Category": "Snapture",
-    "CategoryIcon": "imgs/category",
-    "Icon": "imgs/plugin",
-    "URL": "https://github.com/Este2013/Snapture",
-    "SDKVersion": 2,
-    "Software": { "MinimumVersion": "6.5" },
-    "OS": [{ "Platform": "windows", "MinimumVersion": "10" }],
-    "Nodejs": { "Version": "20", "Debug": "enabled" },
-    "CodePath": "bin/plugin.js",
-    "UUID": "com.este.snapture",
-    "Actions": [
-        {
-            "Name": "Snapshot",
-            "UUID": "com.este.snapture.snapshot",
-            "Icon": "imgs/actions/snapshot",
-            "Tooltip": "Take a Snapture snapshot (still image).",
-            "Controllers": ["Keypad"],
-            "PropertyInspectorPath": "ui/capture.html",
-            "States": [{ "Image": "imgs/actions/snapshot", "TitleAlignment": "bottom" }]
-        },
-        {
-            "Name": "Snapture",
-            "UUID": "com.este.snapture.record",
-            "Icon": "imgs/actions/record",
-            "Tooltip": "Record the screen with Snapture.",
-            "Controllers": ["Keypad"],
-            "PropertyInspectorPath": "ui/capture.html",
-            "States": [{ "Image": "imgs/actions/record_key", "TitleAlignment": "bottom" }]
-        },
-        {
-            "Name": "Open last snap",
-            "UUID": "com.este.snapture.openlast",
-            "Icon": "imgs/actions/openlast",
-            "Tooltip": "Open the last snapshot or recording.",
-            "Controllers": ["Keypad"],
-            "PropertyInspectorPath": "ui/openlast.html",
-            "States": [{ "Image": "imgs/actions/openlast", "TitleAlignment": "bottom" }]
-        }
-    ]
+	"$schema": "https://schemas.elgato.com/streamdeck/plugins/manifest.json",
+	"Name": "Snapture",
+	"Version": "1.0.0.0",
+	"Author": "Este2013",
+	"Description": "Capture snapshots and screen recordings with Snapture.",
+	"Category": "Snapture",
+	"CategoryIcon": "imgs/category",
+	"Icon": "imgs/plugin",
+	"URL": "https://github.com/Este2013/Snapture",
+	"SDKVersion": 2,
+	"Software": {
+		"MinimumVersion": "6.5"
+	},
+	"OS": [
+		{
+			"Platform": "windows",
+			"MinimumVersion": "10"
+		}
+	],
+	"Nodejs": {
+		"Version": "20"
+	},
+	"CodePath": "bin/plugin.js",
+	"UUID": "com.este.snapture",
+	"Actions": [
+		{
+			"Name": "Snapshot",
+			"UUID": "com.este.snapture.snapshot",
+			"Icon": "imgs/actions/snapshot",
+			"Tooltip": "Take a Snapture snapshot (still image).",
+			"Controllers": [
+				"Keypad"
+			],
+			"PropertyInspectorPath": "ui/capture.html",
+			"States": [
+				{
+					"Image": "imgs/actions/snapshot",
+					"TitleAlignment": "bottom"
+				}
+			]
+		},
+		{
+			"Name": "Snapture",
+			"UUID": "com.este.snapture.record",
+			"Icon": "imgs/actions/record",
+			"Tooltip": "Record the screen with Snapture.",
+			"Controllers": [
+				"Keypad"
+			],
+			"PropertyInspectorPath": "ui/capture.html",
+			"States": [
+				{
+					"Image": "imgs/actions/record_key",
+					"TitleAlignment": "bottom"
+				}
+			]
+		},
+		{
+			"Name": "Open last snap",
+			"UUID": "com.este.snapture.openlast",
+			"Icon": "imgs/actions/openlast",
+			"Tooltip": "Open the last snapshot or recording.",
+			"Controllers": [
+				"Keypad"
+			],
+			"PropertyInspectorPath": "ui/openlast.html",
+			"States": [
+				{
+					"Image": "imgs/actions/openlast",
+					"TitleAlignment": "bottom"
+				}
+			]
+		}
+	]
 }
